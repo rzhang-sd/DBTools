@@ -1,0 +1,46 @@
+# git filter-branch only works one dir at a time, so we do it for each dir.
+for d in docs strati-hub-app strati-hub-pipeline strati-hub-rs strati-hub-schema strati-hub-budget-ui;
+do
+  # step 1. Prepare source repo.
+  # prepare source; the tmp_ dir can be anywhere, we just have to refer to it when we run that git pull command. 
+  #  I ran this right in the target (budget-manager) repo's root dir, just to keep it simple.
+# git clone from single branch
+git clone --single-branch --branch STRCOE-934 git@gecgithub01.walmart.com:strati/strati-hub.git tmp_budget_rs
+
+# to keep only single file
+git filter-branch -f --prune-empty --index-filter 'git rm --cached --ignore-unmatch $(git ls-files | grep -v "RequestStatus.java")'
+
+  git clone git@gecgithub01.walmart.com:strati/strati-hub.git tmp_$d
+  pushd tmp_$d
+  git remote rm origin
+  # this only works one dir at a time.
+  git filter-branch -f --subdirectory-filter $d -- --all
+  if [ $d == "strati-hub-budget-ui" ]; then
+    target_dir=strati-budget-manager-ui
+  else 
+    target_dir="${d/hub/budget-manager}"
+  fi
+  # make sure the target dir here is the same as the one in the target repo.
+  mkdir $target_dir
+  mv * $target_dir
+  git add .
+  git commit -m "copy $d to $target_dir in a new repo with commit history"
+  popd
+  
+  # step 2. Merge to target repo's dir. Do this in the target repo's root dir.
+  if [ $d != "strati-hub-budget-ui" ]; then # UI needs some manual handling.
+    # merged to target.
+    git pull tmp_$d master --allow-unrelated-histories
+    # Handle merge conflict. I use very simple logic: keep what's in source for Java stuff, so I just delete new, copy from budget-manager repo.
+    git status | grep "new file:" | cut -f3-5 -d" " | sed -e 's/ /git rm -f/' | /bin/sh
+    git status | grep "both added:" | cut -f7-8 -d" " | sed -e 's/ \(.*\)/cp -p  ..\/..\/strati-budget-manager\/\1 \1/' | /bin/sh
+    # After merge, add, commit and push.
+    git add -u
+    git commit -m "merge from hub" 
+    git push
+  else
+    git pull tmp_$d master --allow-unrelated-histories
+    # Handle merge conflict. Simple logic: keep what's in hub repo for UI stuff. So I just copy it from hub repo.
+    git status | grep "both added:" |egrep ".jsx$|.js$|.jsp$|.lock"| cut -f7-8 -d" " | sed -e 's/ \(strati-budget-manager-ui\)\(.*\)/cp -p  ..\/..\/strati-hub\/strati-hub-budget-ui\/\2 \1\2/' | /bin/sh
+  fi
+done
